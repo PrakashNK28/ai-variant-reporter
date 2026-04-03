@@ -1,0 +1,21 @@
+# Environment variables
+.env
+.env.*
+api_keys.py
+env.py
+
+# Python
+__pycache__/
+*.pyc
+
+# System files
+.DS_Store
+
+# Virtual environments
+venv/
+.venv/
+
+# Data files (sensitive)
+*.vcf
+*.vcf.gz
+*.gz
