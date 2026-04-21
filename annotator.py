@@ -3,10 +3,65 @@
 
 import requests
 import time
+import os 
 
 # ── CACHE ───────────────────────────────────────────────
 vep_cache = {}
+# ── GENE LOOKUP BY POSITION (Ensembl overlap API) ───────
+def get_gene_from_ncbi(chrom, pos):
+    """
+    Find gene name at a chromosomal position using
+    Ensembl overlap API - more reliable than NCBI for this.
+    """
+    try:
+        # Ensembl overlap endpoint - finds genes at a position
+        url = f"https://rest.ensembl.org/overlap/region/human/{chrom}:{pos}-{pos}"
 
+        headers = {"Accept": "application/json"}
+        params = {"feature": "gene", "content-type": "application/json"}
+
+        response = requests.get(
+            url,
+            headers=headers,
+            params=params,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            print(f"⚠️ Ensembl overlap failed: {response.status_code}")
+            return "Unknown"
+
+        data = response.json()
+
+        if not data:
+            # No gene exactly at this position - search wider window
+            url2 = f"https://rest.ensembl.org/overlap/region/human/{chrom}:{max(1,pos-50000)}-{pos+50000}"
+            response2 = requests.get(
+                url2,
+                headers=headers,
+                params=params,
+                timeout=15
+            )
+            if response2.status_code == 200:
+                data = response2.json()
+
+        if not data:
+            print(f"⚠️ No gene found at chr{chrom}:{pos}")
+            return "Intergenic"
+
+        # Get the gene with external name (symbol)
+        for item in data:
+            gene_name = item.get("external_name")
+            if gene_name:
+                print(f"✅ Ensembl overlap found: {gene_name} at chr{chrom}:{pos}")
+                return gene_name
+
+        return "Unknown"
+
+    except Exception as e:
+        print(f"Gene lookup error: {e}")
+        return "Unknown"
+    
 # ── HGVS API (PRIMARY) ──────────────────────────────────
 def call_vep_hgvs(chrom, pos, ref, alt):
     key = f"{chrom}-{pos}-{ref}-{alt}"
@@ -78,38 +133,64 @@ def annotate_variant(variant):
     ref = variant["ref"]
     alt = variant["alt"]
 
-    # 🔥 TRY HGVS
+    # Try HGVS first
     data = call_vep_hgvs(chrom, pos, ref, alt)
 
-    # 🔥 FALLBACK
+    # Try region fallback
     if not data:
-        print("⚠️ HGVS failed → using region fallback")
+        print(f"⚠️ HGVS failed → using region fallback")
         data = call_vep_region(chrom, pos, ref, alt)
 
+    # If BOTH VEP calls failed — go straight to Ensembl overlap
     if not data:
+        print(f"⚠️ Both VEP calls failed → using Ensembl overlap for chr{chrom}:{pos}")
+        gene_name = get_gene_from_ncbi(chrom, pos)
+        variant["gene"] = gene_name
+        variant["annotation"] = {
+            "gene": gene_name,
+            "consequence": "unknown",
+            "impact": "UNKNOWN",
+            "sift": None,
+            "polyphen": None,
+            "hgvsp": ""
+        }
+        variant["gnomad_af"] = None
+        variant["clinvar"] = "Unknown"
         return variant
 
     vep_data = data[0]
+    transcripts = vep_data.get("transcript_consequences", [])
 
-    transcript = vep_data.get("transcript_consequences", [{}])[0]
+    # Get gene from canonical transcript first, then any transcript
+    gene = "Unknown"
+    chosen_transcript = {}
 
-    # ✅ FIX: SAFE GENE HANDLING
-    gene = transcript.get("gene_symbol")
-    if not gene:
-        gene = "Intergenic/Unknown"
+    for t in transcripts:
+        if t.get("canonical") == 1:
+            gene = t.get("gene_symbol", "Unknown")
+            chosen_transcript = t
+            break
+
+    if gene == "Unknown" and transcripts:
+        gene = transcripts[0].get("gene_symbol", "Unknown")
+        chosen_transcript = transcripts[0]
+
+    # If still no gene from VEP — use Ensembl overlap
+    if gene in ["Unknown", "Intergenic/Unknown", "", None]:
+        print(f"⚠️ VEP returned no gene → Ensembl overlap for chr{chrom}:{pos}")
+        gene = get_gene_from_ncbi(chrom, pos)
 
     annotation = {
         "gene": gene,
-        "consequence": transcript.get("consequence_terms", ["unknown"])[0],
-        "impact": transcript.get("impact", "UNKNOWN"),
-        "sift": transcript.get("sift_score"),
-        "polyphen": transcript.get("polyphen_score"),
-        "hgvsp": transcript.get("hgvsp", "")
+        "consequence": chosen_transcript.get("consequence_terms", ["unknown"])[0] if chosen_transcript else "unknown",
+        "impact": chosen_transcript.get("impact", "UNKNOWN") if chosen_transcript else "UNKNOWN",
+        "sift": chosen_transcript.get("sift_score"),
+        "polyphen": chosen_transcript.get("polyphen_score"),
+        "hgvsp": chosen_transcript.get("hgvsp", "")
     }
 
     variant["annotation"] = annotation
     variant["gene"] = gene
-
     variant["gnomad_af"] = extract_gnomad_af(vep_data)
     variant["clinvar"] = extract_clinvar(vep_data)
 
@@ -258,3 +339,7 @@ def apply_acmg_classification(variants):
         v["acmg"] = combine_acmg(ev)
 
     return variants
+
+# ── NCBI FALLBACK GENE LOOKUP ───────────────────────────
+# ── NCBI FALLBACK GENE LOOKUP ───────────────────────────
+
