@@ -3,6 +3,7 @@
 
 import streamlit as st
 import json
+import pandas as pd
 import os
 from parser import parse_vcf
 from annotator import annotate_all, filter_rare_variants, rank_variants, apply_acmg_classification
@@ -161,7 +162,22 @@ if source:
             "Evidence": ", ".join(v.get("acmg_evidence", [])),
         })
 
-    st.dataframe(table, use_container_width=True)
+    import pandas as pd
+
+    df = pd.DataFrame(table)
+
+    def colour_priority(row):
+        if row["Priority"] == "HIGH":
+            return ["background-color: #ffebee; color: #c62828"] * len(row)
+        elif row["Priority"] == "MEDIUM":
+            return ["background-color: #fff3e0; color: #e65100"] * len(row)
+        elif row["Priority"] == "LOW":
+            return ["background-color: #e8f5e9; color: #2e7d32"] * len(row)
+        else:
+            return [""] * len(row)
+
+    styled_df = df.style.apply(colour_priority, axis=1)
+    st.dataframe(styled_df, use_container_width=True)
     st.divider()
 
     # Step 3: Report
