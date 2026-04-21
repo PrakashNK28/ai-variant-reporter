@@ -3,3 +3,4 @@ anthropic
 python-dotenv
 requests
 plotly
+python-docx

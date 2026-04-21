@@ -49,6 +49,14 @@ with st.sidebar:
     show_raw = st.checkbox("Show raw variant data", False)
 
     st.divider()
+    st.header("🌐 Report Language")
+    report_language = st.selectbox(
+        "Generate report in:",
+        ["English", "Tamil (தமிழ்)","Malayalam (മലയാളം)","Kannada (ಕನ್ನಡ)", "Telugu (తెలుగు)", "Hindi (हिंदी)"],
+        index=0
+    )
+
+    st.divider()
 
     st.warning(
         "⚠️ Do NOT upload real patient data to public apps.\n\n"
@@ -177,6 +185,38 @@ if source:
     st.divider()
 
     # 🔥 TOP PRIORITY SECTION
+    # ── GENE FUNCTION CARDS ─────────────────────────────
+    st.subheader("🧬 Identified Genes")
+
+    gene_info = {
+        "TP53": "Tumour suppressor gene. Mutations found in over 50% of human cancers. Associated with Li-Fraumeni syndrome.",
+        "BRCA1": "DNA repair gene. Pathogenic variants significantly increase risk of breast and ovarian cancer.",
+        "BRCA2": "DNA repair gene. Associated with breast, ovarian, and pancreatic cancer risk.",
+        "CFTR": "Chloride channel gene. Mutations cause cystic fibrosis — a serious lung and digestive disease.",
+        "HBB": "Haemoglobin beta gene. Mutations cause sickle cell disease and beta-thalassaemia.",
+        "EGFR": "Epidermal growth factor receptor. Frequently mutated in lung cancer. Targetable by specific drugs.",
+        "KRAS": "Cell signalling gene. One of the most commonly mutated genes in pancreatic and colorectal cancer.",
+        "MLH1": "DNA mismatch repair gene. Mutations cause Lynch syndrome — hereditary colorectal cancer.",
+        "PTEN": "Tumour suppressor. Mutations cause Cowden syndrome — increased risk of breast and thyroid cancer.",
+        "APC":  "Colorectal cancer suppressor. Mutations cause familial adenomatous polyposis.",
+    }
+
+    unique_genes = list(set([
+        v.get("gene", "Unknown") for v in annotated
+        if v.get("gene") not in ["Unknown", "Intergenic", None]
+    ]))
+
+    if unique_genes:
+        gene_cols = st.columns(len(unique_genes))
+        for i, gene in enumerate(unique_genes):
+            with gene_cols[i]:
+                info = gene_info.get(gene, f"{gene} — clinical significance requires expert review.")
+                priority_variants = [v for v in annotated if v.get("gene") == gene]
+                top_priority = priority_variants[0].get("priority", "LOW") if priority_variants else "LOW"
+                colour = "🔴" if top_priority == "HIGH" else "🟡" if top_priority == "MEDIUM" else "🟢"
+                st.info(f"{colour} **{gene}**\n\n{info}")
+                
+                
     st.subheader("🔥 Top Priority Variants")
     top = [v for v in final if v.get("priority") == "HIGH"]
 
@@ -242,7 +282,7 @@ if source:
         st.divider()
 
         # Downloads
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
 
         with col1:
             st.download_button(
@@ -255,10 +295,21 @@ if source:
         with col2:
             st.download_button(
                 "⬇️ Download JSON",
-                data=json.dumps(final, indent=2),
+                data=json.dumps(annotated, indent=2),
                 file_name=f"{patient_id}_variants.json",
                 mime="application/json"
             )
+
+        with col3:
+            from report_generator import generate_word_report
+            word_file = generate_word_report (annotated,report, patient_id,report_language)
+            with open(word_file, "rb") as f:
+                st.download_button(
+                    "⬇️ Download Word",
+                    data=f.read(),
+                    file_name=word_file,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
 
 # ── FOOTER ─────────────────────────────────────────────
 st.divider()

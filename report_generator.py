@@ -12,7 +12,7 @@ load_dotenv(dotenv_path=Path.home() / ".env", override=True)
 load_dotenv()
 
 
-def generate_report(variants, patient_id="SAMPLE_001"):
+def generate_report(variants, patient_id="SAMPLE_001", language="English"):
     """
     Generate a clinical variant interpretation report using AI (Claude).
     Falls back to rule-based report if API fails.
@@ -67,7 +67,11 @@ Instructions:
 
 4. DISCLAIMER
 
-Keep report under 400 words.
+Keep report under 500 words.
+Use professional medical language.
+Generate the entire report in {language}.
+If language is tamil or malayalam or kannada or  Telugu or Hindi, use that language throughout but keep gene names, 
+variant positions, and ACMG terms in English.
 """
 
     # ── AI GENERATION ────────────────────────────────────
@@ -152,3 +156,74 @@ Interpretation:
     report += "This is an AI-assisted research report and must be reviewed by a clinical geneticist.\n"
 
     return report
+
+
+def generate_word_report(variants, report_text, patient_id, language="English"):
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from datetime import date
+
+    doc = Document()
+
+    # Title
+    title = doc.add_heading("SpectralG — Clinical Variant Report", 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    # Patient info
+    doc.add_paragraph(f"Sample ID: {patient_id}")
+    doc.add_paragraph(f"Date: {date.today().strftime('%d %B %Y')}")
+    doc.add_paragraph(f"Tool: SpectralG | Ensembl VEP + ACMG + Claude AI")
+    doc.add_paragraph(f"Variants Analysed: {len(variants)}")
+    doc.add_paragraph("")
+
+    # Variant table
+    doc.add_heading("Variant Summary", level=1)
+    table = doc.add_table(rows=1, cols=6)
+    table.style = "Table Grid"
+
+    headers = ["Gene", "Position", "Change", "Impact", "ACMG", "Priority"]
+    for i, h in enumerate(headers):
+        cell = table.rows[0].cells[i]
+        cell.text = h
+        for para in cell.paragraphs:
+            for run in para.runs:
+                run.bold = True
+
+    for v in variants:
+        ann = v.get("annotation", {})
+        row = table.add_row().cells
+        row[0].text = str(v.get("gene", "Unknown"))
+        row[1].text = f"chr{v['chrom']}:{v['pos']}"
+        row[2].text = f"{v['ref']}>{v['alt']}"
+        row[3].text = str(ann.get("impact", "?"))
+        row[4].text = str(v.get("acmg", "VUS"))
+        row[5].text = str(v.get("priority", "LOW"))
+
+    doc.add_paragraph("")
+
+    # AI Report text
+    doc.add_heading("Clinical Interpretation", level=1)
+    for line in report_text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("## "):
+            doc.add_heading(line.replace("## ", ""), level=2)
+        elif line.startswith("# "):
+            doc.add_heading(line.replace("# ", ""), level=1)
+        else:
+            doc.add_paragraph(line)
+
+    # Disclaimer
+    doc.add_heading("Disclaimer", level=1)
+    p = doc.add_paragraph(
+        "SpectralG is an AI-assisted research tool. "
+        "All reports must be reviewed by a qualified clinical geneticist "
+        "before clinical use. Do not use for diagnosis without professional review."
+    )
+    p.runs[0].italic = True
+
+    filename = f"{patient_id}_SpectralG_report.docx"
+    doc.save(filename)
+    return filename
