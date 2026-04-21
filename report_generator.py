@@ -43,7 +43,7 @@ def generate_report(variants, patient_id="SAMPLE_001"):
 
     # ── PROMPT ───────────────────────────────────────────
     prompt = f"""
-You are an expert clinical geneticist.
+You are an expert clinical geneticist using SpectralG, an AI-powered variant interpretation tool.
 
 Analyze the following variant data and generate a clinical report.
 

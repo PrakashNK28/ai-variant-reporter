@@ -13,14 +13,14 @@ from report_generator import generate_report
 MAX_VARIANTS = 10
 
 st.set_page_config(
-    page_title="AI Variant Report Generator",
-    page_icon="🧬",
+    page_title="SpectralG",
+    #page_icon="🧬",
     layout="centered"
 )
 
-st.title("🧬 AI Variant Report Generator")
-st.markdown("Upload a VCF file to generate a clinical genetics report.")
-st.caption("VEP + ClinVar + AI | Research tool only")
+#st.title("🧬 SpectralG")
+st.markdown("AI-powered clinical variant interpretation — from VCF to clinical report in minutes.")
+st.caption("Ensembl VEP + ACMG + Claude AI | Research tool — requires clinical geneticist review")
 st.divider()
 
 # ── SIDEBAR ─────────────────────────────────────────────
@@ -130,7 +130,53 @@ if source:
 
     st.success("✅ Annotation complete")
 
-    # 🔥 TOP PRIORITY
+    # ── SUMMARY DASHBOARD ───────────────────────────────
+    st.subheader("📊 Summary")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    total = len(annotated)
+    high = len([v for v in annotated if v.get("priority") == "HIGH"])
+    medium = len([v for v in annotated if v.get("priority") == "MEDIUM"])
+    pathogenic = len([v for v in annotated if v.get("acmg") in [
+        "Pathogenic", "Likely pathogenic", "Likely Pathogenic"
+    ]])
+
+    col1.metric("Total Variants", total)
+    col2.metric("🔴 HIGH Priority", high)
+    col3.metric("🟡 MEDIUM Priority", medium)
+    col4.metric("⚠️ Pathogenic/LP", pathogenic)
+
+    st.divider()
+
+    # ── ACMG PIE CHART ──────────────────────────────────
+    acmg_counts = {}
+    for v in annotated:
+        label = v.get("acmg", "VUS")
+        acmg_counts[label] = acmg_counts.get(label, 0) + 1
+
+    if acmg_counts:
+        import plotly.express as px
+        fig = px.pie(
+            names=list(acmg_counts.keys()),
+            values=list(acmg_counts.values()),
+            title="ACMG Classification Distribution",
+            color=list(acmg_counts.keys()),
+            color_discrete_map={
+                "Pathogenic": "#c62828",
+                "Likely pathogenic": "#e53935",
+                "Likely Pathogenic": "#e53935",
+                "VUS": "#f9a825",
+                "Likely Benign": "#43a047",
+                "Benign": "#1b5e20"
+            }
+        )
+        fig.update_layout(height=300, margin=dict(t=40, b=0, l=0, r=0))
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # 🔥 TOP PRIORITY SECTION
     st.subheader("🔥 Top Priority Variants")
     top = [v for v in final if v.get("priority") == "HIGH"]
 
@@ -216,4 +262,4 @@ if source:
 
 # ── FOOTER ─────────────────────────────────────────────
 st.divider()
-st.caption("Built with Streamlit | VEP | AI")
+st.caption("SpectralG | Built using Streamlit · Ensembl VEP · anthropic | India")
