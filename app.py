@@ -3,6 +3,7 @@
 
 import streamlit as st
 import json
+import os
 from parser import parse_vcf
 from annotator import annotate_all, filter_rare_variants, rank_variants, apply_acmg_classification
 from report_generator import generate_report
@@ -25,6 +26,21 @@ st.divider()
 with st.sidebar:
     st.header("Patient Info")
     patient_id = st.text_input("Sample ID", value="SAMPLE_001")
+
+    st.divider()
+
+    st.header("🔑 Claude API Key")
+    user_api_key = st.text_input(
+        "Enter your Claude API key",
+        type="password",
+        placeholder="sk-ant-api03-...",
+        help="Get a free key at console.anthropic.com"
+    )
+    if user_api_key:
+        os.environ["ANTHROPIC_API_KEY"] = user_api_key
+        st.success("✅ API key loaded")
+    else:
+        st.info("ℹ️ Enter your Claude API key to generate AI reports")
 
     st.divider()
 
