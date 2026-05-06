@@ -1,6 +1,11 @@
-streamlit
-anthropic
-python-dotenv
-requests
-plotly
-python-docx
+streamlit>=1.32.0
+anthropic>=0.23.0
+pandas>=2.0.0
+numpy>=1.24.0
+openpyxl>=3.1.0
+requests>=2.31.0
+plotly>=5.18.0
+reportlab>=4.1.0
+PyMuPDF>=1.24.0
+python-docx>=1.1.0
+python-dotenv>=1.0.0

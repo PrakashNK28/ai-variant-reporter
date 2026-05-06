@@ -343,32 +343,3 @@ def apply_acmg_classification(variants):
 # ── NCBI FALLBACK GENE LOOKUP ───────────────────────────
 # ── NCBI FALLBACK GENE LOOKUP ───────────────────────────
 
-
-
-# ── GNOMAD SAS ENRICHMENT ────────────────────────────────
-def enrich_gnomad_sas(variants):
-    """
-    Enrich variants with gnomAD South Asian frequency.
-    Called separately from main annotation pipeline.
-    """
-    for v in variants:
-        af = v.get("gnomad_af")
-        # If already a dict with SAS data — skip
-        if isinstance(af, dict) and af.get("south_asian") is not None:
-            continue
-        # If no AF at all — try to get it
-        if af is None:
-            chrom = v.get("chrom", "")
-            pos = v.get("pos", 0)
-            ref = v.get("ref", "")
-            alt = v.get("alt", "")
-            if chrom and pos and ref and alt:
-                try:
-                    data = call_vep_hgvs(chrom, pos, ref, alt)
-                    if not data:
-                        data = call_vep_region(chrom, pos, ref, alt)
-                    if data:
-                        v["gnomad_af"] = extract_gnomad_af(data[0])
-                except:
-                    pass
-    return variants

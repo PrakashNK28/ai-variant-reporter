@@ -12,7 +12,7 @@ load_dotenv(dotenv_path=Path.home() / ".env", override=True)
 load_dotenv()
 
 
-def generate_report(variants, patient_id="SAMPLE_001", language="English"):
+def generate_report(variants, patient_id="SAMPLE_001", clinical_info=None, language="English"):
     """
     Generate a clinical variant interpretation report using AI (Claude).
     Falls back to rule-based report if API fails.
@@ -42,13 +42,27 @@ def generate_report(variants, patient_id="SAMPLE_001", language="English"):
         })
 
     # ── PROMPT ───────────────────────────────────────────
+    # ── PROMPT ───────────────────────────────────────────
+    # Extract clinical context if provided
+    if clinical_info is None:
+        clinical_info = {}
+
+    sex = clinical_info.get("sex", "Sex: not provided in referral")
+    indication = clinical_info.get("indication", "Not provided")
+    report_type = clinical_info.get("report_type", "Clinical WES")
+    gp = clinical_info.get("genotype_phenotype_correlation", "Not assessed")
+
     prompt = f"""
 You are an expert clinical geneticist using SpectralG, an AI-powered variant interpretation tool.
 
-Analyze the following variant data and generate a clinical report.
+Generate a clinical variant interpretation report.
 
 Patient ID: {patient_id}
-Variants analyzed: {len(variants)}
+Report Type: {report_type}
+Sex: {sex}
+Clinical Indication: {indication}
+Genotype-Phenotype Correlation: {gp}
+Variants Analysed: {len(variants)}
 
 Variant Data:
 {json.dumps(variant_summary, indent=2)}
@@ -56,22 +70,29 @@ Variant Data:
 Instructions:
 
 1. EXECUTIVE SUMMARY
+- State key finding clearly
 - Highlight high-risk variants
+- State genotype-phenotype correlation explicitly as present/absent/partial/not assessed
 
 2. VARIANT INTERPRETATION
-- Gene
-- ACMG classification
-- Clinical relevance
+For each variant:
+- Gene name and function
+- ACMG classification with evidence
+- Clinical relevance in plain language
 
 3. CLINICAL RECOMMENDATIONS
+- Next steps for the ordering clinician
+- Do not say treatment is mandatory — say "standard-of-care per guideline, to be implemented by treating team"
 
 4. DISCLAIMER
+- AI-assisted, requires clinical geneticist review
+- PP5 not applied per ACMG 2023
 
-Keep report under 500 words.
+Keep report under 600 words.
 Use professional medical language.
 Generate the entire report in {language}.
-If language is tamil or malayalam or kannada or  Telugu or Hindi, use that language throughout but keep gene names, 
-variant positions, and ACMG terms in English.
+If language is Tamil, Malayalam, Kannada, Telugu or Hindi — use that language throughout
+but keep gene names, variant positions, and ACMG terms in English.
 """
 
     # ── AI GENERATION ────────────────────────────────────
@@ -84,7 +105,7 @@ variant positions, and ACMG terms in English.
             client = anthropic.Anthropic(api_key=api_key)
 
             response = client.messages.create(
-                model="claude-3-haiku-20240307",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=800,
                 messages=[{"role": "user", "content": prompt}]
             )
