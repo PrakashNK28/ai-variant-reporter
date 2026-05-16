@@ -1,0 +1,61 @@
+{
+  "total": 10,
+  "vep_success": 10,
+  "gene_correct": 7,
+  "classification_exact": 3,
+  "classification_acceptable": 10,
+  "hgvs_populated": 6,
+  "acmg_table_present": 10,
+  "evidence_panel_present": 10,
+  "errors": 0,
+  "field_coverage": {
+    "gene": {
+      "present": 9,
+      "total": 10
+    },
+    "consequence": {
+      "present": 10,
+      "total": 10
+    },
+    "impact": {
+      "present": 10,
+      "total": 10
+    },
+    "hgvsc": {
+      "present": 6,
+      "total": 10
+    },
+    "hgvsp": {
+      "present": 4,
+      "total": 10
+    },
+    "gnomad_af": {
+      "present": 2,
+      "total": 10
+    },
+    "clinvar": {
+      "present": 0,
+      "total": 10
+    },
+    "acmg_class": {
+      "present": 10,
+      "total": 10
+    },
+    "confidence": {
+      "present": 10,
+      "total": 10
+    },
+    "acmg_table": {
+      "present": 10,
+      "total": 10
+    },
+    "evidence_panel": {
+      "present": 10,
+      "total": 10
+    },
+    "vep_success": {
+      "present": 10,
+      "total": 10
+    }
+  }
+}
