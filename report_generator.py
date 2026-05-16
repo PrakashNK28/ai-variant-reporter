@@ -369,7 +369,13 @@ Status: **{clinical_info.get('genotype_phenotype_correlation','Not assessed')}**
 Variant annotation: Ensembl VEP REST API (GRCh38).
 Gene identification fallback: Ensembl Overlap API.
 Population frequencies: gnomAD v4.1 — South Asian (SAS) subpopulation prioritised for Indian patients.
-Classification framework: ACMG/AMP 2015 (Richards et al., Genet Med 2015) + 2023 updates.
+("Classification Framework",
+ "ACMG/AMP 2015 (Richards et al., Genet Med 2015) + "
+ "2023 updates (Biesecker & Harrison, Genet Med 2023) + "
+ "ACGS Best Practice Guidelines v4.1 (2024) | "
+ "PP3 at supporting level only per Pejaver et al. 2022 | "
+ "PP5 not applied per ACMG 2023 | "
+ "REVEL threshold ≥0.733 recommended for PP3 (not available via VEP REST API — manual lookup required)"),
 PP5 not applied: per ACMG 2023 guidance (Biesecker & Harrison, Genet Med 2023).
 Computational tools: SIFT, PolyPhen-2.
 Database access date: {today}.

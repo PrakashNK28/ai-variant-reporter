@@ -626,7 +626,12 @@ def generate_pdf(variants: list, clinical_info: dict, ai_report: str = "",
                                f"Franklin by Genoox | VarSome | PubMed | Ensembl VEP | "
                                f"Access date: {date.today()}"),
         ("gnomAD Population", "South Asian (sas) subpopulation used as primary reference for Indian patients"),
-        ("Computational Tools", "SIFT | PolyPhen-2 | CADD | REVEL (>0.75 = PP3_Strong per ACMG 2023)"),
+        ("Computational Tools",
+ "SIFT | PolyPhen-2 (applied via VEP REST API) | "
+ "REVEL: recommended preferred tool for PP3 per Pejaver et al. 2022 "
+ "(threshold ≥0.733 for PP3 supporting; ≤0.249 for BP4 supporting) — "
+ "not available via VEP REST API, manual lookup required for full compliance | "
+ "AlphaMissense: emerging tool, not yet applied"),
         ("Confidence Level", confidence),
     ]))
     story.append(sp)

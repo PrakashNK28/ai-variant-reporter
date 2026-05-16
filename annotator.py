@@ -294,9 +294,11 @@ def build_acmg_criteria_table(variant, annotation, gnomad_af, clinvar):
     sift_str = f"SIFT {sift:.3f} ({'deleterious' if sift_dam else 'tolerated'})" if sift is not None else "SIFT N/A"
     poly_str = f"PolyPhen {polyphen:.3f} ({'damaging' if poly_dam else 'benign'})" if polyphen is not None else "PolyPhen N/A"
     pp3_ev = (
-        f"{sift_str} | {poly_str}. "
-        f"PP3 {'applied — at least one tool predicts damaging' if pp3 else 'not applied — insufficient computational evidence'}."
-    )
+    f"{sift_str} | {poly_str} | "
+    f"REVEL: Not available via VEP REST API — recommend manual REVEL lookup "
+    f"(threshold ≥0.733 for PP3 per Pejaver et al. 2022 / ATM VCEP 2024). "
+    f"PP3 {'applied based on SIFT/PolyPhen — supporting level only' if pp3 else 'not applied'}."
+)
 
     # PP4 — Supporting: Phenotype specific to gene
     pp4 = False
