@@ -25,10 +25,22 @@ GENE_SPECIFIC_RULES = {
     },
 
     "TP53": {
-        "PM2_threshold": 0.00001,  # Very strict for TP53
-        "PP2_applicable": True,
-        "source": "TP53-VCEP guidelines",
-        "last_updated": "2021"
+    "pm2_threshold": 0.00004,  # TP53 VCEP specific threshold
+    "hotspot_codons": [175, 245, 248, 249, 273, 282],  # PM1 hotspot codons
+    "pm1_note": (
+        "Codons 175, 245, 248, 249, 273, 282 are defined as mutational "
+        "hotspots by ClinGen TP53 VCEP (PMID: 8023157). PM1 applies if "
+        "variant falls within these codons."
+    ),
+    "revel_threshold": 0.7,  # TP53 VCEP uses BayesDel >0.16 and AlignGVGD >C15
+    "pp2_applicable": True,
+    "vcep_version": "2.0",
+    "vcep_date": "July 2024",
+    "source": "ClinGen TP53 Expert Panel Specifications to ACMG/AMP v2.0, 2024",
+    "disease": "Li-Fraumeni Syndrome (OMIM 151623)",
+    "inheritance": "Autosomal Dominant",
+    "last_updated": "2024-07"
+
     },
 
     "PKD1": {

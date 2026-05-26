@@ -235,10 +235,40 @@ def build_acmg_criteria_table(variant, annotation, gnomad_af, clinvar):
     ps4 = False
     ps4_ev = "Case-control data not available computationally. PS4 not applied."
 
-    # PM1 — Moderate: Located in mutational hotspot/critical domain
+    ## PM1 — Moderate: Located in mutational hotspot/critical domain
+# Gene-specific hotspot codons loaded from gene_specific_rules.py
+try:
+    from gene_specific_rules import get_gene_rule
+    gene_rule = get_gene_rule(gene)
+    hotspot_codons = gene_rule.get("hotspot_codons", [])
+
+    # Extract codon number from protein change
+    # e.g. p.Arg248Gln → codon 248
+    hgvsp = annotation.get("hgvsp", "")
+    codon_num = None
+    import re
+    match = re.search(r'[A-Za-z]+(\d+)[A-Za-z]', hgvsp)
+    if match:
+        codon_num = int(match.group(1))
+
+    if hotspot_codons and codon_num and codon_num in hotspot_codons:
+        pm1 = True
+        pm1_ev = (
+            f"Codon {codon_num} in {gene} is a defined mutational hotspot "
+            f"per ClinGen VCEP. Hotspot codons: {hotspot_codons}. "
+            f"PM1 applied per {gene_rule.get('source','ClinGen VCEP')}."
+        )
+    else:
+        pm1 = False
+        pm1_ev = (
+            f"Codon {codon_num} is not in known hotspot list for {gene} "
+            f"({hotspot_codons}). PM1 not applied."
+            if codon_num else
+            "Codon number not extractable from HGVS notation. PM1 not applied."
+        )
+except Exception as e:
     pm1 = False
-    pm1_ev = ("Domain-level annotation requires ClinGen/UniProt data. "
-              "Not determined from VEP alone. PM1 not applied.")
+    pm1_ev = f"PM1 hotspot check failed: {e}. Not applied."
 
     # PM2 — Moderate: Absent/rare in population
     if af is None:
