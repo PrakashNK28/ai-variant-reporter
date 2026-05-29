@@ -235,40 +235,10 @@ def build_acmg_criteria_table(variant, annotation, gnomad_af, clinvar):
     ps4 = False
     ps4_ev = "Case-control data not available computationally. PS4 not applied."
 
-    ## PM1 — Moderate: Located in mutational hotspot/critical domain
-# Gene-specific hotspot codons loaded from gene_specific_rules.py
-try:
-    from gene_specific_rules import get_gene_rule
-    gene_rule = get_gene_rule(gene)
-    hotspot_codons = gene_rule.get("hotspot_codons", [])
-
-    # Extract codon number from protein change
-    # e.g. p.Arg248Gln → codon 248
-    hgvsp = annotation.get("hgvsp", "")
-    codon_num = None
-    import re
-    match = re.search(r'[A-Za-z]+(\d+)[A-Za-z]', hgvsp)
-    if match:
-        codon_num = int(match.group(1))
-
-    if hotspot_codons and codon_num and codon_num in hotspot_codons:
-        pm1 = True
-        pm1_ev = (
-            f"Codon {codon_num} in {gene} is a defined mutational hotspot "
-            f"per ClinGen VCEP. Hotspot codons: {hotspot_codons}. "
-            f"PM1 applied per {gene_rule.get('source','ClinGen VCEP')}."
-        )
-    else:
-        pm1 = False
-        pm1_ev = (
-            f"Codon {codon_num} is not in known hotspot list for {gene} "
-            f"({hotspot_codons}). PM1 not applied."
-            if codon_num else
-            "Codon number not extractable from HGVS notation. PM1 not applied."
-        )
-except Exception as e:
+    # PM1 — Moderate: Located in mutational hotspot/critical domain
     pm1 = False
-    pm1_ev = f"PM1 hotspot check failed: {e}. Not applied."
+    pm1_ev = ("Domain-level annotation requires ClinGen/UniProt data. "
+              "Not determined from VEP alone. PM1 not applied.")
 
     # PM2 — Moderate: Absent/rare in population
     if af is None:
@@ -324,11 +294,9 @@ except Exception as e:
     sift_str = f"SIFT {sift:.3f} ({'deleterious' if sift_dam else 'tolerated'})" if sift is not None else "SIFT N/A"
     poly_str = f"PolyPhen {polyphen:.3f} ({'damaging' if poly_dam else 'benign'})" if polyphen is not None else "PolyPhen N/A"
     pp3_ev = (
-    f"{sift_str} | {poly_str} | "
-    f"REVEL: Not available via VEP REST API — recommend manual REVEL lookup "
-    f"(threshold ≥0.733 for PP3 per Pejaver et al. 2022 / ATM VCEP 2024). "
-    f"PP3 {'applied based on SIFT/PolyPhen — supporting level only' if pp3 else 'not applied'}."
-)
+        f"{sift_str} | {poly_str}. "
+        f"PP3 {'applied — at least one tool predicts damaging' if pp3 else 'not applied — insufficient computational evidence'}."
+    )
 
     # PP4 — Supporting: Phenotype specific to gene
     pp4 = False
@@ -636,10 +604,6 @@ def annotate_variant(variant):
         }
         gnomad_af = extract_gnomad_af(vep_data)
         clinvar   = extract_clinvar(vep_data)
-        # If VEP did not return ClinVar — try direct NCBI lookup
-        if clinvar == "Unknown":
-            print(f"ClinVar not in VEP → direct NCBI lookup for chr{chrom}:{pos}")
-            clinvar = lookup_clinvar_direct(chrom, pos, ref, alt)
 
         variant.update({
             "annotation": annotation, "gene": gene_name,
@@ -745,55 +709,3 @@ def apply_acmg_classification(variants):
             v["evidence_panel"] = build_evidence_panel(
                 v, ann, v.get("gnomad_af"), v.get("clinvar","Unknown"))
     return variants
-# ── DIRECT CLINVAR LOOKUP ────────────────────────────────────────────────────
-def lookup_clinvar_direct(chrom, pos, ref, alt):
-    """
-    Direct ClinVar lookup via NCBI E-utilities.
-    Called when VEP does not return ClinVar colocated data.
-    Uses chromosomal position to find ClinVar records.
-    Returns clinical significance string or "Unknown".
-    """
-    try:
-        api_key = os.getenv("NCBI_API_KEY", "")
-        base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
-
-        # Search ClinVar by genomic position
-        term = f"{chrom}[chr] AND {pos}[chrpos37] AND human[orgn]"
-
-        r = requests.get(f"{base}esearch.fcgi", params={
-            "db":      "clinvar",
-            "term":    term,
-            "retmax":  3,
-            "retmode": "json",
-            "api_key": api_key
-        }, timeout=10)
-
-        if not r.ok:
-            return "Unknown"
-
-        ids = r.json().get("esearchresult", {}).get("idlist", [])
-
-        if not ids:
-            return "Unknown"
-
-        # Fetch clinical significance from first result
-        r2 = requests.get(f"{base}esummary.fcgi", params={
-            "db":      "clinvar",
-            "id":      ids[0],
-            "retmode": "json",
-            "api_key": api_key
-        }, timeout=10)
-
-        if not r2.ok:
-            return "Unknown"
-
-        result = r2.json().get("result", {}).get(ids[0], {})
-        sig = result.get("clinical_significance", {})
-
-        if isinstance(sig, dict):
-            return sig.get("description", "Unknown")
-        return str(sig) if sig else "Unknown"
-
-    except Exception as e:
-        print(f"ClinVar direct lookup error: {e}")
-        return "Unknown"
