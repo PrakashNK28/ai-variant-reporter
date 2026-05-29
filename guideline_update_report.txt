@@ -1,0 +1,24 @@
+======================================================================
+SPECTRALG GUIDELINE MONITOR REPORT
+Generated: 26 May 2026
+Lookback period: 35 days
+======================================================================
+
+DATABASE AND TOOL VERSIONS
+----------------------------------------
+✅ Ensembl VEP: version 115 (no change)
+
+NEW CLINGEN VCEP GENE-SPECIFIC GUIDELINES
+----------------------------------------
+✅ No new ClinGen VCEP papers found this period
+
+NEW ACMG / VARIANT CLASSIFICATION PUBLICATIONS
+----------------------------------------
+✅ No new guideline publications found this period
+
+ACTION SUMMARY
+----------------------------------------
+✅ No immediate actions required — SpectralG is current
+
+SpectralG Guideline Monitor | Prakash NK | Next run recommended: 25 June 2026
+======================================================================

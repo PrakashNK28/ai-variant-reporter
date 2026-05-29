@@ -125,7 +125,63 @@ with st.sidebar:
     )
 
     st.divider()
+    # ── CLINICAL EVIDENCE INPUT ──────────────────────────────────────────
+    st.divider()
+    st.header("🧬 Clinical Evidence Input")
+    st.caption(
+        "Provide known clinical evidence to improve ACMG classification. "
+        "These inputs apply PS2, PS3, PP1, PP4 criteria directly."
+    )
 
+    de_novo = st.selectbox(
+        "De novo status",
+        ["Unknown",
+         "Confirmed de novo (PS2)",
+         "Assumed de novo — unconfirmed (PM6)",
+         "Inherited",
+         "Not applicable"],
+        index=0,
+        help="PS2 applies when variant confirmed de novo with parental testing"
+    )
+
+    phenotype_match = st.selectbox(
+        "Phenotype-genotype match",
+        ["Not assessed",
+         "Strong match — highly specific phenotype (PP4)",
+         "Partial match",
+         "No match (BP5)"],
+        index=0,
+        help="PP4 applies when clinical phenotype is highly specific for the gene"
+    )
+
+    family_affected = st.selectbox(
+        "Affected family members with same variant",
+        ["Unknown",
+         "Multiple affected family members (PP1_Moderate)",
+         "One affected family member (PP1_Supporting)",
+         "Unaffected family members carry variant (BS4)"],
+        index=0,
+        help="PP1 applies when variant cosegregates with disease in family"
+    )
+
+    functional_data = st.selectbox(
+        "Functional study data available",
+        ["None",
+         "Published studies show damaging effect (PS3)",
+         "Published studies show no damaging effect (BS3)"],
+        index=0,
+        help="PS3/BS3 require published wet-lab functional evidence"
+    )
+
+    # Store in clinical_evidence dict for passing to annotator
+    clinical_evidence = {
+        "de_novo":         de_novo,
+        "phenotype_match": phenotype_match,
+        "family_affected": family_affected,
+        "functional_data": functional_data,
+    }
+
+    st.divider()
     st.header("⚙️ Advanced Settings")
     show_raw = st.checkbox("Show raw variant data", False)
     fetch_sas = st.checkbox("Fetch gnomAD SAS (slower)", True,
@@ -154,6 +210,7 @@ clinical_info = parse_clinical_info({
     "genotype_phenotype_correlation": gp_correlation,
     "gp_narrative": f"Genotype-phenotype correlation: {gp_correlation}. "
                     f"Clinical features: {clinical_features[:200] if clinical_features else 'not provided.'}",
+                    "clinical_evidence": clinical_evidence,
 })
 
 # ── INPUT METHOD SELECTOR ────────────────────────────────────────────────────
