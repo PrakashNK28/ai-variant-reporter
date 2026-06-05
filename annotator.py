@@ -1,15 +1,24 @@
 # annotator.py
-# SpectralG — Upgraded Clinical Variant Annotator v2.1
+# SpectralG — Clinical Variant Annotator v2.1
 # Research-grade: full ACMG table, HGVS notation, evidence panel, gnomAD SAS
 #
 # Framework: ACMG/AMP 2015 (Richards et al., Genet Med 2015)
 # PP5/BP6 NOT applied per ACMG 2023 (Biesecker & Harrison)
 
+import re
 import requests
 import time
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+
+# Indian Variant Registry — import with fallback if file missing
+try:
+    from indian_variant_registry import lookup_indian_evidence
+    REGISTRY_AVAILABLE = True
+except ImportError:
+    REGISTRY_AVAILABLE = False
+    print("⚠️ Indian variant registry not found — registry lookup disabled")
 
 load_dotenv(dotenv_path=Path.home() / ".env", override=True)
 
@@ -25,7 +34,9 @@ KNOWN_DISEASE_GENES = {
     "RB1","WT1","RUNX1","FLT3","KRAS","NRAS","BRAF",
     "EGFR","ALK","RET","MEN1","GJB2","GJB6","SLC26A4",
     "MYO7A","OTOF","HEXA","HEXB","GBA","ASPA","ARSA",
-    "DMD","MECP2","FMR1","SMN1","DMPK","MAP1A","OCRL"
+    "DMD","MECP2","FMR1","SMN1","DMPK","MAP1A","OCRL",
+    "MYBPC3","MYH7","KCNQ1","SCN5A","SCN1A","KCNQ2",
+    "DEPDC5","CYP2D6","CYP2C19","DPYD","TPMT"
 }
 
 HIGH_IMPACT_CONSEQUENCES = {
@@ -46,8 +57,8 @@ def call_vep_hgvs(chrom, pos, ref, alt):
     if key in vep_cache:
         return vep_cache[key]
     try:
-        hgvs = f"{chrom}:g.{pos}{ref}>{alt}"
-        url  = f"https://rest.ensembl.org/vep/human/hgvs/{hgvs}"
+        hgvs    = f"{chrom}:g.{pos}{ref}>{alt}"
+        url     = f"https://rest.ensembl.org/vep/human/hgvs/{hgvs}"
         headers = {"Content-Type":"application/json","Accept":"application/json"}
         params  = {"canonical":1,"sift":1,"polyphen":1,"numbers":1,"hgvs":1,"domains":1}
         r = requests.get(url, headers=headers, params=params, timeout=20)
@@ -67,8 +78,8 @@ def call_vep_region(chrom, pos, ref, alt):
     if key in vep_cache:
         return vep_cache[key]
     try:
-        region = f"{chrom} {pos} . {ref} {alt} . . ."
-        url    = "https://rest.ensembl.org/vep/human/region"
+        region  = f"{chrom} {pos} . {ref} {alt} . . ."
+        url     = "https://rest.ensembl.org/vep/human/region"
         headers = {"Content-Type":"application/json","Accept":"application/json"}
         r = requests.post(url, headers=headers,
                           json={"variants":[region],"canonical":1,
@@ -88,7 +99,7 @@ def call_vep_region(chrom, pos, ref, alt):
 def get_gene_from_ensembl_overlap(chrom, pos):
     """Find gene name at position when VEP returns no gene symbol."""
     try:
-        url = f"https://rest.ensembl.org/overlap/region/human/{chrom}:{pos}-{pos}"
+        url     = f"https://rest.ensembl.org/overlap/region/human/{chrom}:{pos}-{pos}"
         headers = {"Accept":"application/json"}
         params  = {"feature":"gene","content-type":"application/json"}
         r = requests.get(url, headers=headers, params=params, timeout=15)
@@ -113,6 +124,47 @@ def get_gene_from_ensembl_overlap(chrom, pos):
     return "Unknown"
 
 
+# ── DIRECT CLINVAR LOOKUP ─────────────────────────────────────────────────────
+# Defined BEFORE annotate_variant which calls it
+def lookup_clinvar_direct(chrom, pos, ref, alt):
+    """
+    Direct ClinVar lookup via NCBI E-utilities.
+    Called when VEP does not return ClinVar colocated data.
+    """
+    try:
+        api_key = os.getenv("NCBI_API_KEY", "")
+        base    = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+        term    = f"{chrom}[chr] AND {pos}[chrpos37] AND human[orgn]"
+
+        r = requests.get(f"{base}esearch.fcgi", params={
+            "db": "clinvar", "term": term,
+            "retmax": 3, "retmode": "json", "api_key": api_key
+        }, timeout=10)
+        if not r.ok:
+            return "Unknown"
+
+        ids = r.json().get("esearchresult", {}).get("idlist", [])
+        if not ids:
+            return "Unknown"
+
+        r2 = requests.get(f"{base}esummary.fcgi", params={
+            "db": "clinvar", "id": ids[0],
+            "retmode": "json", "api_key": api_key
+        }, timeout=10)
+        if not r2.ok:
+            return "Unknown"
+
+        result = r2.json().get("result", {}).get(ids[0], {})
+        sig    = result.get("clinical_significance", {})
+        if isinstance(sig, dict):
+            return sig.get("description", "Unknown")
+        return str(sig) if sig else "Unknown"
+
+    except Exception as e:
+        print(f"ClinVar direct lookup error: {e}")
+        return "Unknown"
+
+
 # ── EXTRACT HGVS NOTATION ─────────────────────────────────────────────────────
 def extract_hgvs(transcript):
     """
@@ -122,13 +174,10 @@ def extract_hgvs(transcript):
     """
     hgvsc = transcript.get("hgvsc") or transcript.get("hgvs_c") or ""
     hgvsp = transcript.get("hgvsp") or transcript.get("hgvs_p") or ""
-
-    # Strip transcript prefix e.g. "ENST00000269305.9:c.215C>G" → "c.215C>G"
     if hgvsc and ":" in hgvsc:
         hgvsc = hgvsc.split(":")[-1]
     if hgvsp and ":" in hgvsp:
         hgvsp = hgvsp.split(":")[-1]
-
     return (hgvsc or "Not available (VEP missing)",
             hgvsp or "Not available (VEP missing)")
 
@@ -138,7 +187,6 @@ def extract_gnomad_af(vep_data):
     """
     Extract gnomAD frequencies from VEP colocated_variants.
     Prioritises South Asian (SAS) subpopulation for Indian patients.
-    Returns dict {global, south_asian, display} or None.
     """
     try:
         for var in vep_data.get("colocated_variants", []):
@@ -162,7 +210,7 @@ def extract_gnomad_af(vep_data):
     return None
 
 
-# ── EXTRACT CLINVAR ───────────────────────────────────────────────────────────
+# ── EXTRACT CLINVAR FROM VEP ──────────────────────────────────────────────────
 def extract_clinvar(vep_data):
     try:
         for var in vep_data.get("colocated_variants", []):
@@ -180,12 +228,10 @@ def build_acmg_criteria_table(variant, annotation, gnomad_af, clinvar):
     Build complete ACMG/AMP 2015 criteria table.
     ALL 28 criteria included — applied True or False.
     PP5 and BP6 always False per ACMG 2023.
-
     Each entry: {code, weight, applied, evidence}
     """
     gene        = annotation.get("gene", "Unknown")
     consequence = annotation.get("consequence", "unknown")
-    impact      = annotation.get("impact", "UNKNOWN").upper()
     sift        = annotation.get("sift")
     polyphen    = annotation.get("polyphen")
 
@@ -193,23 +239,16 @@ def build_acmg_criteria_table(variant, annotation, gnomad_af, clinvar):
     af = None
     af_str = "Not available in gnomAD"
     if isinstance(gnomad_af, dict):
-        af = gnomad_af.get("south_asian") or gnomad_af.get("global")
+        af      = gnomad_af.get("south_asian") or gnomad_af.get("global")
         sas_val = gnomad_af.get("south_asian")
         glb_val = gnomad_af.get("global")
         af_str  = (f"gnomAD SAS: {sas_val if sas_val is not None else 'N/A'} | "
                    f"gnomAD Global: {glb_val if glb_val is not None else 'N/A'}")
     elif gnomad_af is not None:
-        af = float(gnomad_af)
+        af     = float(gnomad_af)
         af_str = f"gnomAD AF: {af:.6f}"
 
-    clinvar_l = (clinvar or "").lower()
-    is_path   = "pathogenic" in clinvar_l and "likely" not in clinvar_l
-    is_lpath  = "likely pathogenic" in clinvar_l
-    is_benign = "benign" in clinvar_l
-
-    # ── Evaluate each criterion ───────────────────────────────────────────────
-
-    # PVS1 — Very Strong Pathogenic: LOF in gene where LOF = disease
+    # ── PVS1 ─────────────────────────────────────────────────────────────────
     pvs1 = consequence in HIGH_IMPACT_CONSEQUENCES
     pvs1_ev = (
         f"Loss-of-function consequence '{consequence}' identified. "
@@ -218,156 +257,205 @@ def build_acmg_criteria_table(variant, annotation, gnomad_af, clinvar):
         f"Consequence '{consequence}' is not loss-of-function. PVS1 not applied."
     )
 
-    # PS1 — Strong: Same AA change as known pathogenic
-    ps1 = False
+    # ── PS1 ──────────────────────────────────────────────────────────────────
+    ps1    = False
     ps1_ev = ("Requires comparison to established pathogenic amino acid changes. "
               "Cannot determine computationally — manual curation required. Not applied.")
 
-    # PS2 — Strong: De novo (confirmed paternity)
-    ps2 = False
+    # ── PS2 ──────────────────────────────────────────────────────────────────
+    ps2    = False
     ps2_ev = "Parental testing data not available. PS2 not applied."
 
-    # PS3 — Strong: Functional studies show damaging effect
-    ps3 = False
+    # ── PS3 ──────────────────────────────────────────────────────────────────
+    ps3    = False
     ps3_ev = "Functional study data not available computationally. PS3 not applied."
 
-    # PS4 — Strong: Prevalence in affected >> controls
-    ps4 = False
-    ps4_ev = "Case-control data not available computationally. PS4 not applied."
+    # ── PS4 — uses Indian Variant Registry ───────────────────────────────────
+    indian_ev = variant.get("indian_registry")
+    if indian_ev and indian_ev.get("observation_count", 0) >= 5:
+        ps4    = True
+        ps4_ev = (
+            f"Variant observed in {indian_ev['observation_count']} "
+            f"Indian patients via SpectralG Indian Variant Registry. "
+            f"Consensus: {indian_ev['consensus']}. "
+            f"PS4 applied — requires expert review before clinical reporting."
+        )
+    elif indian_ev and indian_ev.get("observation_count", 0) >= 3:
+        ps4    = False
+        ps4_ev = (
+            f"Variant observed in {indian_ev['observation_count']} Indian patients "
+            f"(minimum 5 required for PS4). Consensus: {indian_ev['consensus']}. "
+            f"Accumulating evidence — PS4 not yet applied."
+        )
+    else:
+        ps4    = False
+        ps4_ev = (
+            "Case-control data not available computationally. "
+            "Not yet observed in SpectralG Indian Variant Registry. "
+            "PS4 not applied."
+        )
 
-    # PM1 — Moderate: Located in mutational hotspot/critical domain
-    pm1 = False
+    # ── PM1 ──────────────────────────────────────────────────────────────────
+    pm1    = False
     pm1_ev = ("Domain-level annotation requires ClinGen/UniProt data. "
               "Not determined from VEP alone. PM1 not applied.")
+    try:
+        from gene_specific_rules import get_gene_rule
+        gene_rule      = get_gene_rule(gene)
+        hotspot_codons = gene_rule.get("hotspot_codons", [])
+        hgvsp_str      = variant.get("hgvsp", "") or annotation.get("hgvsp", "")
+        codon_num      = None
+        match = re.search(r'[A-Za-z]+(\d+)[A-Za-z]', hgvsp_str)
+        if match:
+            codon_num = int(match.group(1))
+        if hotspot_codons and codon_num and codon_num in hotspot_codons:
+            pm1    = True
+            pm1_ev = (
+                f"Codon {codon_num} in {gene} is a defined mutational hotspot "
+                f"per ClinGen VCEP. Hotspot codons: {hotspot_codons}. "
+                f"PM1 applied per {gene_rule.get('source','ClinGen VCEP')}."
+            )
+        elif hotspot_codons:
+            pm1    = False
+            pm1_ev = (
+                f"Codon {codon_num} not in hotspot list for {gene} {hotspot_codons}. PM1 not applied."
+                if codon_num else
+                f"Codon not extractable from HGVS notation. PM1 not applied."
+            )
+    except Exception as e:
+        pm1    = False
+        pm1_ev = f"PM1 gene-specific check unavailable: {e}. Not applied."
 
-    # PM2 — Moderate: Absent/rare in population
+    # ── PM2 ──────────────────────────────────────────────────────────────────
     if af is None:
-        pm2 = True
+        pm2    = True
         pm2_ev = f"Absent from gnomAD ({af_str}). PM2 applied — absence supports pathogenicity."
     elif af < 0.0001:
-        pm2 = True
+        pm2    = True
         pm2_ev = f"Extremely rare ({af_str}). AF {af:.6f} < 0.0001. PM2 applied."
     elif af < 0.01:
-        pm2 = True
+        pm2    = True
         pm2_ev = f"Rare in population ({af_str}). AF {af:.5f} < 0.01. PM2 applied."
     else:
-        pm2 = False
+        pm2    = False
         pm2_ev = f"AF {af:.5f} ({af_str}) exceeds rare threshold. PM2 not applied."
 
-    # PM3 — Moderate: In trans with pathogenic variant
-    pm3 = False
+    # ── PM3 ──────────────────────────────────────────────────────────────────
+    pm3    = False
     pm3_ev = "Phase and family data not available. PM3 not applied."
 
-    # PM4 — Moderate: Protein length change (in-frame indel)
-    pm4 = consequence in {"inframe_insertion", "inframe_deletion"}
+    # ── PM4 ──────────────────────────────────────────────────────────────────
+    pm4    = consequence in {"inframe_insertion", "inframe_deletion"}
     pm4_ev = (
         f"In-frame indel '{consequence}' causes protein length change. PM4 applied."
         if pm4 else
         f"Consequence '{consequence}' is not an in-frame indel. PM4 not applied."
     )
 
-    # PM5 — Moderate: Novel missense at known pathogenic position
-    pm5 = False
+    # ── PM5 ──────────────────────────────────────────────────────────────────
+    pm5    = False
     pm5_ev = ("Requires variant database comparison at amino acid position. "
               "Cannot determine computationally. PM5 not applied.")
 
-    # PM6 — Moderate: Assumed de novo (unconfirmed)
-    pm6 = False
+    # ── PM6 ──────────────────────────────────────────────────────────────────
+    pm6    = False
     pm6_ev = "Parental data not available. PM6 not applied."
 
-    # PP1 — Supporting: Cosegregation with disease
-    pp1 = False
+    # ── PP1 ──────────────────────────────────────────────────────────────────
+    pp1    = False
     pp1_ev = "Family segregation data not available. PP1 not applied."
 
-    # PP2 — Supporting: Missense in gene with low benign missense rate
-    pp2 = (consequence == "missense_variant") and (gene in KNOWN_DISEASE_GENES)
+    # ── PP2 ──────────────────────────────────────────────────────────────────
+    pp2    = (consequence == "missense_variant") and (gene in KNOWN_DISEASE_GENES)
     pp2_ev = (
         f"Missense variant in {gene} — gene with established missense disease mechanism. PP2 applied."
         if pp2 else
         f"Gene '{gene}' not in curated disease gene list or not missense. PP2 not applied."
     )
 
-    # PP3 — Supporting: Computational tools predict damaging
+    # ── PP3 ──────────────────────────────────────────────────────────────────
     sift_dam = sift is not None and float(sift) <= 0.05
     poly_dam = polyphen is not None and float(polyphen) >= 0.85
-    pp3 = sift_dam or poly_dam
-    sift_str = f"SIFT {sift:.3f} ({'deleterious' if sift_dam else 'tolerated'})" if sift is not None else "SIFT N/A"
-    poly_str = f"PolyPhen {polyphen:.3f} ({'damaging' if poly_dam else 'benign'})" if polyphen is not None else "PolyPhen N/A"
-    pp3_ev = (
+    pp3      = sift_dam or poly_dam
+    sift_str = (f"SIFT {sift:.3f} ({'deleterious' if sift_dam else 'tolerated'})"
+                if sift is not None else "SIFT N/A")
+    poly_str = (f"PolyPhen {polyphen:.3f} ({'damaging' if poly_dam else 'benign'})"
+                if polyphen is not None else "PolyPhen N/A")
+    pp3_ev   = (
         f"{sift_str} | {poly_str}. "
-        f"PP3 {'applied — at least one tool predicts damaging' if pp3 else 'not applied — insufficient computational evidence'}."
+        f"PP3 {'applied — at least one tool predicts damaging' if pp3 else 'not applied'}."
     )
 
-    # PP4 — Supporting: Phenotype specific to gene
-    pp4 = False
+    # ── PP4 ──────────────────────────────────────────────────────────────────
+    pp4    = False
     pp4_ev = "Clinical phenotype not provided. PP4 not applied."
 
-    # PP5 — INTENTIONALLY NOT APPLIED (ACMG 2023)
-    pp5 = False
+    # ── PP5 — INTENTIONALLY NOT APPLIED ──────────────────────────────────────
+    pp5    = False
     pp5_ev = ("PP5 INTENTIONALLY NOT APPLIED per ACMG 2023 (Biesecker & Harrison). "
               "External laboratory assertions excluded as independent evidence. "
               f"ClinVar data documented separately: {clinvar}.")
 
-    # BA1 — Stand-alone Benign: AF > 5%
-    ba1 = af is not None and float(af) > 0.05
+    # ── BA1 ──────────────────────────────────────────────────────────────────
+    ba1    = af is not None and float(af) > 0.05
     ba1_ev = (
         f"AF {af:.4f} ({af_str}) > 5% threshold. BA1 applied — common variant, likely benign."
         if ba1 else
         f"AF ({af_str}) does not exceed 5% threshold. BA1 not applied."
     )
 
-    # BS1 — Strong Benign: AF > 1%
-    bs1 = af is not None and 0.01 < float(af) <= 0.05
+    # ── BS1 ──────────────────────────────────────────────────────────────────
+    bs1    = af is not None and 0.01 < float(af) <= 0.05
     bs1_ev = (
         f"AF {af:.4f} ({af_str}) > 1% threshold. BS1 applied."
         if bs1 else
         f"AF ({af_str}) does not trigger BS1 threshold. Not applied."
     )
 
-    # BS2 — Strong Benign: Observed in healthy adults
-    bs2 = False
+    # ── BS2 ──────────────────────────────────────────────────────────────────
+    bs2    = False
     bs2_ev = "Healthy adult observation data not available. BS2 not applied."
 
-    # BS3 — Strong Benign: Functional studies — no damaging effect
-    bs3 = False
+    # ── BS3 ──────────────────────────────────────────────────────────────────
+    bs3    = False
     bs3_ev = "Functional study data not available. BS3 not applied."
 
-    # BS4 — Strong Benign: Lack of family segregation
-    bs4 = False
+    # ── BS4 ──────────────────────────────────────────────────────────────────
+    bs4    = False
     bs4_ev = "Family data not available. BS4 not applied."
 
-    # BP1 — Supporting Benign: Missense where only LOF causes disease
-    bp1 = False
+    # ── BP1 ──────────────────────────────────────────────────────────────────
+    bp1    = False
     bp1_ev = ("Requires ClinGen gene-disease validity data — cannot determine computationally. "
               "BP1 not applied.")
 
-    # BP2 — Supporting Benign: Observed in trans (AD gene)
-    bp2 = False
+    # ── BP2 ──────────────────────────────────────────────────────────────────
+    bp2    = False
     bp2_ev = "Phase and family data not available. BP2 not applied."
 
-    # BP3 — Supporting Benign: In-frame indel in repeat region
-    bp3 = False
+    # ── BP3 ──────────────────────────────────────────────────────────────────
+    bp3    = False
     bp3_ev = "Repeat region annotation not available from VEP alone. BP3 not applied."
 
-    # BP4 — Supporting Benign: Both tools predict benign
+    # ── BP4 ──────────────────────────────────────────────────────────────────
     sift_tol = sift is not None and float(sift) > 0.05
     poly_ben = polyphen is not None and float(polyphen) < 0.45
-    bp4 = sift_tol and poly_ben
-    bp4_ev = (
+    bp4      = sift_tol and poly_ben
+    bp4_ev   = (
         f"{sift_str} | {poly_str}. "
         f"BP4 {'applied — both tools predict benign/tolerated' if bp4 else 'not applied'}."
     )
 
-    # BP5 — Supporting Benign: Alternate molecular cause found
-    bp5 = False
+    # ── BP5 ──────────────────────────────────────────────────────────────────
+    bp5    = False
     bp5_ev = "Alternate molecular diagnosis data not available. BP5 not applied."
 
-    # BP6 — NOT APPLIED (analogous to PP5 — ACMG 2023)
-    bp6 = False
+    # ── BP6 — NOT APPLIED ────────────────────────────────────────────────────
+    bp6    = False
     bp6_ev = "BP6 NOT APPLIED per ACMG 2023 — analogous to PP5. Excluded."
 
-    # BP7 — Supporting Benign: Synonymous variant, no splicing impact predicted
-    bp7 = consequence == "synonymous_variant"
+    # ── BP7 ──────────────────────────────────────────────────────────────────
+    bp7    = consequence == "synonymous_variant"
     bp7_ev = (
         f"Synonymous variant ('{consequence}') — no amino acid change. BP7 applied."
         if bp7 else
@@ -436,8 +524,8 @@ def combine_acmg_from_table(criteria_table):
     elif bp >= 2:
         cls, conf = "Likely Benign", "Moderate"
     else:
-        cls = "VUS"
-        n = len(applied)
+        cls  = "VUS"
+        n    = len(applied)
         conf = "Moderate" if n >= 3 else "Limited" if n >= 1 else "Insufficient"
 
     return cls, conf, sorted(applied)
@@ -458,8 +546,8 @@ def build_evidence_panel(variant, annotation, gnomad_af, clinvar):
     hgvsp       = variant.get("hgvsp", "Not available")
 
     if isinstance(gnomad_af, dict):
-        sas = gnomad_af.get("south_asian")
-        glb = gnomad_af.get("global")
+        sas     = gnomad_af.get("south_asian")
+        glb     = gnomad_af.get("global")
         sas_str = f"{sas:.6f}" if sas is not None else "Not available in VEP response"
         glb_str = f"{glb:.6f}" if glb is not None else "Not available in VEP response"
     else:
@@ -469,6 +557,21 @@ def build_evidence_panel(variant, annotation, gnomad_af, clinvar):
                 if sift is not None else "Not available")
     poly_str = (f"{polyphen:.3f} ({'Probably Damaging ≥0.85' if polyphen >= 0.85 else 'Not Damaging <0.85'})"
                 if polyphen is not None else "Not available")
+
+    indian_reg = variant.get("indian_registry")
+    if indian_reg:
+        indian_str = (
+            f"SpectralG Indian Variant Registry: "
+            f"{indian_reg.get('observation_count', 0)} observations in Indian patients. "
+            f"Consensus: {indian_reg.get('consensus', 'No data')}. "
+            f"Registry provides PS4 evidence when ≥5 observations present."
+        )
+    else:
+        indian_str = (
+            "Not yet observed in SpectralG Indian Variant Registry. "
+            "Registry grows with each interpreted Indian patient case. "
+            "Submit deidentified cases to contribute to Indian population data."
+        )
 
     return {
         "Population Data": (
@@ -502,6 +605,7 @@ def build_evidence_panel(variant, annotation, gnomad_af, clinvar):
             "No functional study data available computationally. "
             "PS3/BS3 criteria require wet-lab functional evidence — manual curation required."
         ),
+        "Indian Population Evidence": indian_str,
         "Sanger Validation": (
             "Sanger sequencing confirmation recommended before clinical reporting "
             "per standard laboratory protocols and ACMG/AMP reporting guidelines."
@@ -518,76 +622,82 @@ def annotate_variant(variant):
     2. VEP Region (fallback)
     3. Ensembl Overlap (gene name fallback)
     4. Extract HGVS c./p., gnomAD SAS, ClinVar
-    5. Build full ACMG criteria table (28 criteria, always populated)
-    6. Build evidence panel (8 categories, always populated)
+    5. Direct ClinVar NCBI lookup if VEP returns nothing
+    6. Check Indian Variant Registry
+    7. Build full ACMG criteria table (28 criteria, always populated)
+    8. Build evidence panel (9 categories, always populated)
     """
-    chrom = str(variant.get("chrom",""))
+    chrom = str(variant.get("chrom", ""))
     pos   = int(variant.get("pos", 0))
-    ref   = str(variant.get("ref",""))
-    alt   = str(variant.get("alt",""))
+    ref   = str(variant.get("ref", ""))
+    alt   = str(variant.get("alt", ""))
 
-    # Step 1 + 2: VEP calls
+    # ── Steps 1 + 2: VEP calls ───────────────────────────────────────────────
     data = call_vep_hgvs(chrom, pos, ref, alt)
     if not data:
         print(f"⚠️ HGVS failed → region fallback chr{chrom}:{pos}")
         data = call_vep_region(chrom, pos, ref, alt)
 
     if not data:
-        # Step 3: Overlap fallback
+        # ── Step 3: Overlap fallback (VEP completely failed) ─────────────────
         print(f"⚠️ Both VEP failed → Ensembl Overlap chr{chrom}:{pos}")
-        gene_name = get_gene_from_ensembl_overlap(chrom, pos)
+        gene_name  = get_gene_from_ensembl_overlap(chrom, pos)
+        hgvsc      = "Not available (VEP failed)"
+        hgvsp      = "Not available (VEP failed)"
         annotation = {
             "gene": gene_name, "consequence": "unknown",
             "impact": "UNKNOWN", "sift": None, "polyphen": None,
-            "hgvsc": "Not available (VEP failed)",
-            "hgvsp": "Not available (VEP failed)"
+            "hgvsc": hgvsc, "hgvsp": hgvsp
         }
         gnomad_af = None
         clinvar   = "Unknown"
         variant.update({
             "annotation": annotation, "gene": gene_name,
-            "hgvsc": "Not available (VEP failed)",
-            "hgvsp": "Not available (VEP failed)",
+            "hgvsc": hgvsc, "hgvsp": hgvsp,
             "gnomad_af": None, "clinvar": "Unknown",
             "vep_status": "failed"
         })
+
     else:
+        # ── VEP succeeded — extract all data ─────────────────────────────────
         vep_data    = data[0]
         transcripts = vep_data.get("transcript_consequences", [])
         most_severe = vep_data.get("most_severe_consequence", "unknown")
 
-        gene_name = "Unknown"
-        hgvsc = hgvsp = "Not available (VEP missing)"
-        sift_score = polyphen_score = None
+        gene_name          = "Unknown"
+        hgvsc = hgvsp      = "Not available (VEP missing)"
+        sift_score         = None
+        polyphen_score     = None
         chosen_consequence = most_severe
-        chosen_impact = "UNKNOWN"
+        chosen_impact      = "UNKNOWN"
 
         # Priority 1: canonical transcript
         for t in transcripts:
             if t.get("canonical") == 1:
-                gene_name = t.get("gene_symbol","Unknown")
-                hgvsc, hgvsp = extract_hgvs(t)
-                sift_score   = t.get("sift_score")
-                polyphen_score = t.get("polyphen_score")
-                chosen_consequence = t.get("consequence_terms",[most_severe])[0]
-                chosen_impact = t.get("impact","UNKNOWN")
+                gene_name          = t.get("gene_symbol", "Unknown")
+                hgvsc, hgvsp       = extract_hgvs(t)
+                sift_score         = t.get("sift_score")
+                polyphen_score     = t.get("polyphen_score")
+                chosen_consequence = t.get("consequence_terms", [most_severe])[0]
+                chosen_impact      = t.get("impact", "UNKNOWN")
                 break
 
-        # Priority 2: first transcript
+        # Priority 2: first transcript if no canonical found
         if gene_name == "Unknown" and transcripts:
-            t = transcripts[0]
-            gene_name = t.get("gene_symbol","Unknown")
-            hgvsc, hgvsp = extract_hgvs(t)
-            sift_score   = t.get("sift_score")
-            polyphen_score = t.get("polyphen_score")
-            chosen_consequence = t.get("consequence_terms",[most_severe])[0]
-            chosen_impact = t.get("impact","UNKNOWN")
+            t                  = transcripts[0]
+            gene_name          = t.get("gene_symbol", "Unknown")
+            hgvsc, hgvsp       = extract_hgvs(t)
+            sift_score         = t.get("sift_score")
+            polyphen_score     = t.get("polyphen_score")
+            chosen_consequence = t.get("consequence_terms", [most_severe])[0]
+            chosen_impact      = t.get("impact", "UNKNOWN")
 
-        # Priority 3: Overlap fallback
-        if gene_name in ("Unknown","",None):
+        # Priority 3: Overlap fallback if gene still unknown
+        if gene_name in ("Unknown", "", None):
             print(f"⚠️ VEP no gene → Overlap chr{chrom}:{pos}")
             gene_name = get_gene_from_ensembl_overlap(chrom, pos)
 
+        # Infer impact from consequence if VEP did not return it
         if chosen_impact == "UNKNOWN":
             if chosen_consequence in HIGH_IMPACT_CONSEQUENCES:
                 chosen_impact = "HIGH"
@@ -602,8 +712,14 @@ def annotate_variant(variant):
             "polyphen": polyphen_score,
             "hgvsc": hgvsc, "hgvsp": hgvsp
         }
+
         gnomad_af = extract_gnomad_af(vep_data)
         clinvar   = extract_clinvar(vep_data)
+
+        # Step 5: Direct ClinVar NCBI lookup if VEP returned nothing
+        if clinvar == "Unknown":
+            print(f"ClinVar not in VEP → direct NCBI lookup chr{chrom}:{pos}")
+            clinvar = lookup_clinvar_direct(chrom, pos, ref, alt)
 
         variant.update({
             "annotation": annotation, "gene": gene_name,
@@ -612,20 +728,40 @@ def annotate_variant(variant):
             "vep_status": "success"
         })
 
-    # Steps 4–6: ACMG table + evidence panel
+    # ── Step 6: Indian Variant Registry lookup ───────────────────────────────
+    # This runs AFTER both VEP success and VEP failure paths
+    current_gene  = variant.get("gene", "Unknown")
+    current_hgvsc = variant.get("hgvsc", "")
+    if REGISTRY_AVAILABLE and current_gene not in ("Unknown", ""):
+        try:
+            indian_evidence = lookup_indian_evidence(current_gene, current_hgvsc)
+            if indian_evidence and indian_evidence.get("observation_count", 0) >= 3:
+                variant["indian_registry"] = indian_evidence
+                print(f"✅ Indian registry hit: {current_gene} {current_hgvsc} — "
+                      f"{indian_evidence['observation_count']} observations — "
+                      f"consensus: {indian_evidence['consensus']}")
+            else:
+                variant["indian_registry"] = None
+        except Exception as e:
+            print(f"Registry lookup error: {e}")
+            variant["indian_registry"] = None
+    else:
+        variant["indian_registry"] = None
+
+    # ── Steps 7 + 8: ACMG table + evidence panel ─────────────────────────────
     ann = variant["annotation"]
     gaf = variant.get("gnomad_af")
-    cv  = variant.get("clinvar","Unknown")
+    cv  = variant.get("clinvar", "Unknown")
 
-    criteria_table = build_acmg_criteria_table(variant, ann, gaf, cv)
+    criteria_table          = build_acmg_criteria_table(variant, ann, gaf, cv)
     acmg_cls, confidence, evidence_list = combine_acmg_from_table(criteria_table)
 
     variant.update({
-        "acmg":               acmg_cls,
-        "confidence_level":   confidence,
-        "acmg_evidence":      evidence_list,
+        "acmg":                acmg_cls,
+        "confidence_level":    confidence,
+        "acmg_evidence":       evidence_list,
         "acmg_criteria_table": criteria_table,
-        "evidence_panel":     build_evidence_panel(variant, ann, gaf, cv)
+        "evidence_panel":      build_evidence_panel(variant, ann, gaf, cv)
     })
 
     return variant
@@ -633,7 +769,7 @@ def annotate_variant(variant):
 
 # ── BULK ANNOTATION ───────────────────────────────────────────────────────────
 def annotate_all(variants):
-    """Annotate list of variants with 1.1s rate limit between calls."""
+    """Annotate list of variants with 1.1s rate limit between Ensembl API calls."""
     annotated = []
     for i, v in enumerate(variants):
         print(f"Annotating {i+1}/{len(variants)}: chr{v.get('chrom')}:{v.get('pos')}")
@@ -647,14 +783,16 @@ def enrich_gnomad_sas(variants):
     return variants
 
 
-# ── FILTER / RANK / CLASSIFY ──────────────────────────────────────────────────
+# ── FILTER RARE VARIANTS ──────────────────────────────────────────────────────
 def filter_rare_variants(variants, threshold=0.01):
     filtered = []
     for v in variants:
         af_data = v.get("gnomad_af")
         if af_data is None:
-            filtered.append(v); continue
-        af = af_data.get("south_asian") or af_data.get("global") if isinstance(af_data,dict) else af_data
+            filtered.append(v)
+            continue
+        af = (af_data.get("south_asian") or af_data.get("global")
+              if isinstance(af_data, dict) else af_data)
         try:
             if float(af) <= threshold:
                 filtered.append(v)
@@ -663,49 +801,68 @@ def filter_rare_variants(variants, threshold=0.01):
     return filtered
 
 
+# ── SCORE AND RANK VARIANTS ───────────────────────────────────────────────────
 def score_variant(v):
-    score = 0
-    ann   = v.get("annotation", {})
-    gene  = v.get("gene","")
-    impact = ann.get("impact","").upper()
-    score += {"HIGH":3,"MODERATE":2,"LOW":1}.get(impact, 0)
+    score  = 0
+    ann    = v.get("annotation", {})
+    gene   = v.get("gene", "")
+    impact = ann.get("impact", "").upper()
+    score += {"HIGH":3, "MODERATE":2, "LOW":1}.get(impact, 0)
     try:
-        if ann.get("sift") is not None and float(ann["sift"]) <= 0.05:     score += 2
-    except: pass
+        if ann.get("sift") is not None and float(ann["sift"]) <= 0.05:
+            score += 2
+    except (TypeError, ValueError):
+        pass
     try:
-        if ann.get("polyphen") is not None and float(ann["polyphen"]) >= 0.85: score += 2
-    except: pass
-    cv = v.get("clinvar","").lower()
-    if "pathogenic" in cv and "likely" not in cv: score += 3
-    elif "likely pathogenic" in cv:               score += 2
-    if gene in KNOWN_DISEASE_GENES:               score += 1
+        if ann.get("polyphen") is not None and float(ann["polyphen"]) >= 0.85:
+            score += 2
+    except (TypeError, ValueError):
+        pass
+    cv = v.get("clinvar", "").lower()
+    if "pathogenic" in cv and "likely" not in cv:
+        score += 3
+    elif "likely pathogenic" in cv:
+        score += 2
+    if gene in KNOWN_DISEASE_GENES:
+        score += 1
     try:
         af_data = v.get("gnomad_af")
-        af = af_data.get("south_asian") or af_data.get("global") if isinstance(af_data,dict) else af_data
-        if af is not None and float(af) < 0.001: score += 1
-    except: pass
+        af      = (af_data.get("south_asian") or af_data.get("global")
+                   if isinstance(af_data, dict) else af_data)
+        if af is not None and float(af) < 0.001:
+            score += 1
+    except (TypeError, ValueError):
+        pass
     return min(score, 10)
 
 
 def rank_variants(variants):
     for v in variants:
-        s = score_variant(v)
+        s          = score_variant(v)
         v["score"] = s
         v["priority"] = "HIGH" if s >= 7 else "MEDIUM" if s >= 4 else "LOW"
-    return sorted(variants, key=lambda x: x.get("score",0), reverse=True)
+    return sorted(variants, key=lambda x: x.get("score", 0), reverse=True)
 
 
+# ── APPLY ACMG CLASSIFICATION ─────────────────────────────────────────────────
 def apply_acmg_classification(variants):
-    """Ensure every variant has ACMG table and evidence panel."""
+    """Ensure every variant has ACMG table and evidence panel populated."""
     for v in variants:
         if not v.get("acmg_criteria_table"):
-            ann = v.get("annotation",{})
-            ct  = build_acmg_criteria_table(v, ann, v.get("gnomad_af"), v.get("clinvar","Unknown"))
+            ann = v.get("annotation", {})
+            ct  = build_acmg_criteria_table(
+                v, ann, v.get("gnomad_af"), v.get("clinvar", "Unknown")
+            )
             cls, conf, ev = combine_acmg_from_table(ct)
-            v.update({"acmg":cls,"confidence_level":conf,
-                      "acmg_evidence":ev,"acmg_criteria_table":ct})
+            v.update({
+                "acmg":                cls,
+                "confidence_level":    conf,
+                "acmg_evidence":       ev,
+                "acmg_criteria_table": ct
+            })
         if not v.get("evidence_panel"):
-            ann = v.get("annotation",{})
+            ann = v.get("annotation", {})
             v["evidence_panel"] = build_evidence_panel(
-                v, ann, v.get("gnomad_af"), v.get("clinvar","Unknown"))
+                v, ann, v.get("gnomad_af"), v.get("clinvar", "Unknown")
+            )
     return variants
