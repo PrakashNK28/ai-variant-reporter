@@ -18,4 +18,9 @@ venv/
 # Data files (sensitive)
 *.vcf
 *.vcf.gz
-*.gz
+*.gzguideline_monitor_state.json
+guideline_update_report.txt
+guideline_monitor_log.txt
+evidence_cache.json
+evidence_library.json
+indian_variant_registry.json
